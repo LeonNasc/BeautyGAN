@@ -1,8 +1,7 @@
 import tensorflow as tf
 
-print(tf.__version__)
-
 import glob
+import random
 import math
 import imageio
 import matplotlib.pyplot as plt
@@ -11,16 +10,30 @@ import numpy as np
 import os
 import PIL
 from tensorflow.keras import layers
+import tensorflow_datasets as tfds
 import time
 from PIL import Image
 from IPython import display
 
-#(train_images, train_labels), (_, _) = tf.keras.datasets.mnist.load_data()
+ds, info  = tfds.load("CelebA", split="train", with_info = True)
+
+ga = list([img for img in ds.take(19000) if img["attributes"]["Attractive"] == True and img["attributes"]["Male"] == True])
+
+for i in range(len(ga)):
+    ga[i]["image"] = np.array(ga[i]["image"])
+    ga[i]["image"] = Image.fromarray(ga[i]["image"].astype('uint8'), 'RGB')
+    ga[i]["image"] = np.array(ga[i]["image"].resize((128,128), Image.ANTIALIAS) )
+
+def rgb2gray(rgb):
+    img = np.dot(rgb[...,:3], [0.2989, 0.5870, 0.1140]) 
+    return img
+
+ga_men = np.array([rgb2gray(img["image"]) for img in ga])
+ga_men_labels = np.array([5 for _ in range(len(ga_men))])
+#ds_women_labels = np.array([5 for _ in range(len(ds_men))])
+
 
 def safe_open(path):
-    def rgb2gray(rgb):
-        img = np.dot(rgb[...,:3], [0.2989, 0.5870, 0.1140]) 
-        return img
 
     img = Image.open(path)
     img.thumbnail((28, 28), Image.ANTIALIAS)  # resizes image in-place
@@ -38,6 +51,7 @@ def safe_labels():
             except:
                 print(x.split(" "))
 
+'''
 train_images = np.array([safe_open("./FBP-SCUT/"+x) for x in os.listdir("./FBP-SCUT/") if ".jpg" in x])
 train_labels = safe_labels() 
 
@@ -45,7 +59,12 @@ print(train_images.shape)
 train_images = train_images.reshape(train_images.shape[0], 28, 28, 1).astype('float32')
 train_images = (train_images - 127.5) / 127.5 # Normalize the images to [-1, 1]
 
-BUFFER_SIZE = 5500
+'''
+train_images = ga_men.reshape(list(ga_men.shape)+[1]).astype('float32')
+train_images = (train_images - 127.5) / 127.5 # Normalize the images to [-1, 1]
+print(train_images.shape)
+
+BUFFER_SIZE = len(ga_men)
 BATCH_SIZE = 256
 
 
@@ -54,29 +73,43 @@ train_dataset = tf.data.Dataset.from_tensor_slices(train_images).shuffle(BUFFER_
 
 def make_generator_model():
     model = tf.keras.Sequential()
-    model.add(layers.Dense(7*7*256, use_bias=False, input_shape=(100,)))
+    model.add(layers.Dense(8*8*256, use_bias=False, input_shape=(100,)))
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
-    model.add(layers.Reshape((7, 7, 256)))
-    assert model.output_shape == (None, 7, 7, 256) # Note: None is the batch size
+    model.add(layers.Reshape((8, 8, 256)))
+    assert model.output_shape == (None, 8, 8, 256) # Note: None is the batch size
 
     model.add(layers.Conv2DTranspose(128, (5, 5), strides=(1, 1), padding='same', use_bias=False))
-    assert model.output_shape == (None, 7, 7, 128)
+    assert model.output_shape == (None, 8, 8, 128)
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
     model.add(layers.Conv2DTranspose(64, (5, 5), strides=(2, 2), padding='same', use_bias=False))
-    assert model.output_shape == (None, 14, 14, 64)
+    assert model.output_shape == (None, 16, 16, 64)
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
-    model.add(layers.Conv2DTranspose(1, (5, 5), strides=(2, 2), padding='same', use_bias=False, activation='tanh'))
-    assert model.output_shape == (None, 28, 28, 1)
+    model.add(layers.Conv2DTranspose(64, (5, 5), strides=(2, 2), padding='same', use_bias=False))
+    assert model.output_shape == (None, 32, 32, 64)
+    model.add(layers.BatchNormalization())
+    model.add(layers.LeakyReLU())
+
+    model.add(layers.Conv2DTranspose(32, (5, 5), strides=(2, 2), padding='same', use_bias=False))
+    assert model.output_shape == (None, 64, 64, 32)
+    model.add(layers.BatchNormalization())
+    model.add(layers.LeakyReLU())
+
+
+    model.add(layers.Conv2DTranspose(1, (4, 4), strides=(2, 2), padding='same', use_bias=False, activation='tanh'))
+    assert model.output_shape == (None, 128, 128, 1)
 
     return model
 
 
+def get_random_string(length):
+    letters = "abcdefghijklmnopqrstuvwxyz1234567890-"
+    return ''.join(random.choice(letters) for i in range(length))
 
 generator = make_generator_model()
 
@@ -84,11 +117,12 @@ noise = tf.random.normal([1, 100])
 generated_image = generator(noise, training=False)
 
 plt.imshow(generated_image[0, :, :, 0], cmap='gray')
+plt.savefig("./generated/" +get_random_string(10))
 
 def make_discriminator_model():
     model = tf.keras.Sequential()
     model.add(layers.Conv2D(64, (5, 5), strides=(2, 2), padding='same',
-                                     input_shape=[28, 28, 1]))
+                                     input_shape=[128, 128, 1]))
     model.add(layers.LeakyReLU())
     model.add(layers.Dropout(0.3))
 
